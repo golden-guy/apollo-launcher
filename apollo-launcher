@@ -1,0 +1,301 @@
+#!/bin/bash
+
+# ###########################################################################################################################
+#
+# apollo-launcher
+#
+# A wrapper for the apollo-miner binary used for the Apollo BTC stand-alone unit
+#
+# USAGE:
+# * Put this wrapper script in the same folder where the apollo-miner binary is located.
+# * Start it with ./apollo-launcher
+# * The configuration will be assembled on-the-go and can be saved before starting the miner
+# * Use -c command line switch for an existing/prebuilt config file: ./apollo-launcher -c apollo-launcher.cfg
+# * If you like my work use the included config file and crunch some shares for me :)
+#
+#
+# PROPS to @jstefanop for creating this great piece of hardware (As credit, his pool settings are used as default values)
+#
+#
+# AUTHOR: Stefan Berger (golden-guy) https://github.com/golden-guy/apollo-launcher
+#
+# HISTORY:
+# * v1.0  - First release
+#
+# ###########################################################################################################################
+
+
+
+###### CONFIG - START ######
+
+# default config file location
+CONFIG_FILE=apollo-launcher.cfg
+
+# generate a random worker name from UUID
+WORKER=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
+
+# fallback values when data is missing/incomplete
+DEFAULT_HOST=us-east.stratum.slushpool.com
+DEFAULT_PORT=3333
+DEFAULT_USER=jstefanop.$WORKER
+DEFAULT_PASSWORD=x
+DEFAULT_COM_PORT=/dev/ttyACM0
+DEFAULT_AO_MODE=1
+
+# needed for freq selection menu
+FREQ_PROMPTED=0
+
+# set on explicit config file via command line
+FILE_OPT=0
+
+###### CONFIG - END ######
+
+
+
+check_args()
+{
+while getopts c: OPT
+do
+  case $OPT in
+    c) CONFIG_FILE=$OPTARG
+       FILE_OPT=1
+       ;;
+    ?) exit 1
+       ;;
+  esac
+done
+}
+
+check_settings()
+{
+ while [ "x$HOST" == "x" ] ||
+       [ "x$PORT" == "x" ] ||
+       [ "x$USER" == "x" ] ||
+       [ "x$PASSWORD" == "x" ] ||
+       [ "x$COM_PORT" == "x" ] ||
+       [ "x$POWER" == "x" ] ||
+       [ "x$FREQ" == "x" ] ||
+       [ "x$AO_MODE" == "x" ]
+  do
+    echo ""
+    echo "Settings incomplete! Please try again..."
+    # invalidate config file if defined
+    unset CONFIG_FILE
+    get_settings
+  done
+}
+
+reset_settings()
+{
+  FREQ_PROMPTED=0
+  SETTINGS=""
+}
+
+set_settings()
+{
+  SETTINGS="-host $HOST -port $PORT -user $USER -pswd $PASSWORD -comport $COM_PORT -brd_ocp $POWER -osc $FREQ -ao_mode $AO_MODE" 
+}
+
+print_settings()
+{
+  echo ""
+  echo "Current settings:"
+  echo "HOST=$HOST"
+  echo "PORT=$PORT"
+  echo "USER=$USER"
+  echo "PASSWORD=$PASSWORD"
+  echo "COM_PORT=$COM_PORT"
+  echo "AO_MODE=$AO_MODE"
+  echo "POWER=$POWER"
+  echo "FREQ=$FREQ"
+  echo ""
+  echo "CMD_LINE=$SETTINGS"
+  echo ""
+}
+
+save_settings_to_file()
+{
+  print_settings
+  read -p "Do you want to save the current configuration? (y|N): "
+  if [ "$REPLY" == "Y" ] || [ "$REPLY" == "y" ]
+  then
+    read -e -i "$CONFIG_FILE" -p "Select file to save: "
+    if ! [ "x$REPLY" == "x" ]
+    then
+      CONFIG_FILE=$REPLY
+    fi
+    echo "HOST=$HOST" > $CONFIG_FILE
+    echo "PORT=$PORT" >> $CONFIG_FILE
+    echo "USER=$USER" >> $CONFIG_FILE
+    echo "PASSWORD=$PASSWORD" >> $CONFIG_FILE
+    echo "COM_PORT=$COM_PORT" >> $CONFIG_FILE
+    echo "POWER=$POWER" >> $CONFIG_FILE
+    echo "FREQ=$FREQ" >> $CONFIG_FILE
+    echo "AO_MODE=$AO_MODE" >> $CONFIG_FILE
+  fi
+}
+
+get_settings_from_file()
+{
+  while IFS='=' read -r KEY VALUE
+  do
+    case $KEY in
+    HOST)
+      HOST=$VALUE
+      ;;
+    PORT)
+      PORT=$VALUE
+      ;;
+    USER)
+      USER=$VALUE
+      ;;
+    PASSWORD)
+      PASSWORD=$VALUE
+      ;;
+    COM_PORT)
+      COM_PORT=$VALUE
+      ;;
+    AO_MODE)
+      AO_MODE=$VALUE
+      ;;
+    POWER)
+      POWER=$VALUE
+      ;;
+    FREQ)
+      FREQ=$VALUE
+      ;;
+    *)
+      ;;
+  esac
+  done < $CONFIG_FILE
+}
+
+prompt_for_settings() {
+  read -e -i "$DEFAULT_HOST" -p "Hostname: "
+  HOST=$REPLY
+  read -e -i "$DEFAULT_PORT" -p "Port: "
+  PORT=$REPLY
+  read -e -i "$DEFAULT_USER" -p "Username/Wallet address: "
+  USER=$REPLY
+  read -e -i "$DEFAULT_PASSWORD" -p "Password: "
+  PASSWORD=$REPLY
+  read -e -i "$DEFAULT_COM_PORT" -p "COM Port: "
+  COM_PORT=$REPLY
+  read -e -i "$DEFAULT_AO_MODE" -p "AO_MODE: "
+  AO_MODE=$REPLY
+
+  select_power_profile
+  FREQ_PROMPTED=1
+}
+
+get_settings()
+{
+  reset_settings
+  echo ""
+  if ! [ -z $CONFIG_FILE ]
+  then
+    if [ -f $CONFIG_FILE ]
+    then
+      read -e -i "y" -p "Existing configuration file found. Use settings from $CONFIG_FILE? (y|n): "
+      if [ "$REPLY" == "Y" ] || [ "$REPLY" == "y" ]
+      then
+        get_settings_from_file
+        set_settings
+      else
+        prompt_for_settings
+      fi
+    fi
+  else
+    prompt_for_settings
+  fi
+
+  if [ $FREQ_PROMPTED -eq 0 ]
+  then
+    print_settings
+    read -p "Do you want to change board power and frequency now? (y|N): "
+    if [ "$REPLY" == "Y" ] || [ "$REPLY" == "y" ]
+    then
+      select_power_profile
+    fi
+  fi
+}
+
+print_warning() {
+  echo ""
+  echo "If you are using the FutureBit APU-200 PSU that comes with your unit DO NOT SET the power (using -brd_ocp) higher than 75%. The PSU is limited to 200 watts, and going beyond this will trip or overheat your power supply!"
+  echo "ONLY set the power higher than 75% if you are using your own PSU that is capable of at least 300 watts per unit, and BOTH PCIE 6 Pin power plugs are plugged into your unit."
+  echo "I am NOT responsible for damage, nor will warranty devices damaged from running beyond 75% power. Proceed at your own risk!"
+  echo ""
+}
+
+select_power_profile()
+{
+  echo ""
+  echo "Select power profile:"
+  echo "1) ECO (-brd_ocp 48 -osc 30)"
+  echo "2) BALANCED (-brd_ocp 60 -osc 40)"
+  echo "3) TURBO (-brd_ocp 75 -osc 50)"
+  echo "4) CUSTOM (ONLY use at your own risk!)"
+  echo ""
+
+  read -p "Make your selection (1-4): "
+
+  case $REPLY in
+  1)
+	MODE=ECO
+    POWER=48
+    FREQ=30
+    ;;
+  2)
+	MODE=BALANCED
+    POWER=60
+    FREQ=40
+    ;;
+  3)
+	MODE=TURBO
+    POWER=75
+    FREQ=50
+    ;;
+  4)
+    print_warning
+	MODE=CUSTOM
+    read -e -i "75" -p "Board Power (30-95): "
+    POWER=$REPLY
+    read -e -i "50" -p "Board Freq (30-60): "
+    FREQ=$REPLY
+    ;;
+  *)
+    # using ECO mode as default
+	MODE=ECO
+    POWER=48
+    FREQ=30
+    ;;
+  esac
+
+  set_settings
+}
+
+start_miner() {
+  echo ""
+  read -p "Press Enter key to start the apollo-miner..."
+  ./apollo-miner $SETTINGS
+}
+
+check_args $@
+
+# fast-pass for explicit configs
+if [ $FILE_OPT -eq 1 ]
+then
+  get_settings_from_file
+  check_settings
+  set_settings
+else
+  get_settings
+  check_settings
+  set_settings
+  save_settings_to_file
+fi
+
+start_miner
+
+exit 0
