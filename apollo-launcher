@@ -48,6 +48,13 @@ FREQ_PROMPTED=0
 # set on explicit config file via command line
 FILE_OPT=0
 
+# sanitize values
+MIN_POWER=30
+MAX_POWER=95
+
+MIN_FREQ=30
+MAX_FREQ=60
+
 ###### CONFIG - END ######
 
 
@@ -261,8 +268,29 @@ select_power_profile()
 	MODE=CUSTOM
     read -e -i "75" -p "Board Power (30-95): "
     POWER=$REPLY
+
+    if [ $POWER -lt $MIN_POWER ]
+    then
+      echo "Power value too low, setting to $MIN_POWER"
+      POWER=$MIN_POWER
+    elif [ $POWER -gt $MAX_POWER ]
+    then
+      echo "Power value too high, setting to $MAX_POWER"
+      POWER=$MAX_POWER
+    fi
+
     read -e -i "50" -p "Board Freq (30-60): "
     FREQ=$REPLY
+
+    if [ $FREQ -lt $MIN_FREQ ]
+    then
+      echo "Frequency value too low, setting to $MIN_FREQ"
+      FREQ=$MIN_FREQ
+    elif [ $FREQ -gt $MAX_FREQ ]
+    then
+      echo "Frequency value too high, setting to $MAX_FREQ"
+      FREQ=$MAX_FREQ
+    fi
     ;;
   *)
     # using ECO mode as default
